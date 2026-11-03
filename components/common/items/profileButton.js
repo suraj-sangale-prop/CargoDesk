@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { convertFirstLetterCapital } from "@/utilities/utils";
 import CommonModal from "../commonModal";
-import ResetConfirmation from "./resetConfirmation";
+import ResetConfirmation from "./commonConfirmation";
 
 const ProfileButton = ({ username, onclickLogOut }) => {
   const [dropdownVisible, setDropdownVisible] = useState(false);

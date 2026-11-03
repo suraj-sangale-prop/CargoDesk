@@ -4,7 +4,7 @@ import { useRouter } from "next/router";
 import { FiMenu, FiSearch, FiBell, FiChevronDown, FiLogOut, FiSettings, FiUser } from "react-icons/fi";
 import { postApiData } from "@/utilities/services/apiService";
 import CommonModal from "../common/commonModal";
-import ResetConfirmation from "../common/items/resetConfirmation";
+import ResetConfirmation from "../common/items/commonConfirmation";
 import { convertFirstLetterCapital } from "@/utilities/utils";
 import { useFleetDriver } from "@/context/fleetDriverContext";
 
@@ -53,7 +53,7 @@ export default function TopHeader({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
- 
+
 
   const handleSearchSubmit = (e) => {
     e.preventDefault();
@@ -77,11 +77,10 @@ export default function TopHeader({
 
         {/* Brand Name (Smoothly slides and fades in when sidebar is closed) */}
         <div
-          className={`overflow-hidden transition-all duration-300 ease-in-out shrink-0 flex items-center ${
-            showBrandName
+          className={`overflow-hidden transition-all duration-300 ease-in-out shrink-0 flex items-center ${showBrandName
               ? "max-w-[180px] opacity-100 translate-x-0"
               : "max-w-0 opacity-0 -translate-x-3 pointer-events-none"
-          }`}
+            }`}
           aria-hidden={!showBrandName}
         >
           <Link
@@ -159,9 +158,8 @@ export default function TopHeader({
             <span className="hidden sm:inline-block text-sm font-semibold text-slate-800">
               {userName}
             </span>
-            <FiChevronDown className={`w-4 h-4 text-slate-400 group-hover:text-slate-600 transition-transform duration-200 ${
-              dropdownOpen ? "rotate-180" : ""
-            }`} />
+            <FiChevronDown className={`w-4 h-4 text-slate-400 group-hover:text-slate-600 transition-transform duration-200 ${dropdownOpen ? "rotate-180" : ""
+              }`} />
           </button>
 
           {/* Profile Dropdown */}
@@ -188,7 +186,7 @@ export default function TopHeader({
                 <button
                   onClick={() => {
                     setDropdownOpen(false);
-               toggleLogoutModal();     
+                    toggleLogoutModal();
                   }}
                   className="w-full flex items-center gap-2.5 px-4 py-2 text-xs font-medium text-rose-600 hover:bg-rose-50/70 transition-colors"
                 >
@@ -201,7 +199,7 @@ export default function TopHeader({
         </div>
       </div>
 
-     
+
     </header>
   );
 }

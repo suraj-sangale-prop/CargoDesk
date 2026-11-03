@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { showToast } from "@/utilities/toastService";
 import { postApiData, uploadMediaFile, compressImageFile } from "@/utilities/services/apiService";
+import { watermarkCapturedPhoto, preloadLocation, getCurrentLocationDetails, checkLocationPermissionState, setManualLocation, isSecureOrigin } from "@/utilities/photoWatermark";
 import {
   FiCamera,
   FiUploadCloud,
@@ -82,6 +83,26 @@ export default function MaintenanceFormV2({
   // 3. Media Attachments State
   const [attachedFiles, setAttachedFiles] = useState([]);
   const [fileError, setFileError] = useState(null);
+  const [isProcessingMedia, setIsProcessingMedia] = useState(false);
+  const [mediaProcessingText, setMediaProcessingText] = useState("");
+  const [showPermissionModal, setShowPermissionModal] = useState(false);
+  const [permissionModalReason, setPermissionModalReason] = useState("");
+  const [showManualModal, setShowManualModal] = useState(false);
+  const [manualCoordsInput, setManualCoordsInput] = useState({
+    lat: "19.0596",
+    lng: "72.8895",
+    area: "Chembur, Mumbai",
+  });
+  const [locationStatus, setLocationStatus] = useState({
+    loading: false,
+    resolved: false,
+    address: "",
+    placeName: "",
+    coordStr: "",
+    latitude: null,
+    longitude: null,
+    error: null,
+  });
 
   // 4. Submission & Loading State
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -94,6 +115,160 @@ export default function MaintenanceFormV2({
   const textareaRef = useRef(null);
   const recognitionRef = useRef(null);
   const speechBaseTextRef = useRef("");
+
+  // Initialize device location early so photo watermarking is instant & reliable
+  useEffect(() => {
+    let isMounted = true;
+    async function initLocation() {
+      if (typeof window === "undefined" || !navigator.geolocation) return;
+
+      try {
+        const permState = await checkLocationPermissionState();
+        if (permState === "denied") {
+          if (isMounted) {
+            setLocationStatus({ loading: false, resolved: false, address: "", error: "denied" });
+          }
+          return;
+        }
+      } catch (_) {}
+
+      if (isMounted) {
+        setLocationStatus((prev) => ({ ...prev, loading: true }));
+      }
+
+      const loc = await getCurrentLocationDetails();
+      if (isMounted) {
+        if (loc && loc.latitude && loc.longitude) {
+          setLocationStatus({
+            loading: false,
+            resolved: true,
+            address: loc.address,
+            placeName: loc.placeName || "",
+            coordStr: loc.coordStr || "",
+            latitude: loc.latitude,
+            longitude: loc.longitude,
+            error: null,
+          });
+        } else {
+          setLocationStatus({
+            loading: false,
+            resolved: false,
+            address: "",
+            placeName: "",
+            coordStr: "",
+            latitude: null,
+            longitude: null,
+            error: loc?.error || "unavailable",
+          });
+        }
+      }
+    }
+
+    initLocation();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // Quick set known office location (Chembur)
+  const handleSetChemburLocation = async (e) => {
+    if (e && e.preventDefault) e.preventDefault();
+    if (e && e.stopPropagation) e.stopPropagation();
+
+    const loc = await setManualLocation("19.0596", "72.8895", "Chembur, Mumbai");
+    if (loc) {
+      setLocationStatus({
+        loading: false,
+        resolved: true,
+        address: loc.address,
+        placeName: loc.placeName || "Chembur, Mumbai",
+        coordStr: loc.coordStr || "19.0596° N, 72.8895° E",
+        latitude: loc.latitude,
+        longitude: loc.longitude,
+        error: null,
+      });
+      showToast({ message: `Location set: ${loc.address}`, type: "success" });
+      setShowPermissionModal(false);
+      setShowManualModal(false);
+    }
+  };
+
+  // Submit custom manual coordinates
+  const handleSaveManualCoords = async (e) => {
+    if (e && e.preventDefault) e.preventDefault();
+    const lat = manualCoordsInput.lat.trim();
+    const lng = manualCoordsInput.lng.trim();
+    const area = manualCoordsInput.area.trim();
+
+    if (!lat || !lng || isNaN(Number(lat)) || isNaN(Number(lng))) {
+      showToast({ message: "Please enter valid numeric latitude and longitude", type: "error" });
+      return;
+    }
+
+    const loc = await setManualLocation(lat, lng, area);
+    if (loc) {
+      setLocationStatus({
+        loading: false,
+        resolved: true,
+        address: loc.address,
+        placeName: loc.placeName || area,
+        coordStr: loc.coordStr,
+        latitude: loc.latitude,
+        longitude: loc.longitude,
+        error: null,
+      });
+      showToast({ message: `Coordinates updated: ${loc.address}`, type: "success" });
+      setShowManualModal(false);
+      setShowPermissionModal(false);
+    }
+  };
+
+  // Request or retry enabling location
+  const handleRequestLocation = async (e) => {
+    if (e && e.stopPropagation) e.stopPropagation();
+    setLocationStatus({ loading: true, resolved: false, address: "", error: null });
+
+    try {
+      const loc = await getCurrentLocationDetails({ forceRefresh: true });
+      if (loc && loc.latitude && loc.longitude) {
+        setLocationStatus({
+          loading: false,
+          resolved: true,
+          address: loc.address,
+          placeName: loc.placeName || "",
+          coordStr: loc.coordStr || "",
+          latitude: loc.latitude,
+          longitude: loc.longitude,
+          error: null,
+        });
+        showToast({ message: `GPS Acquired: ${loc.address}`, type: "success" });
+      } else {
+        setLocationStatus({
+          loading: false,
+          resolved: false,
+          address: "",
+          placeName: "",
+          coordStr: "",
+          latitude: null,
+          longitude: null,
+          error: loc?.error || "denied",
+        });
+        if (loc?.permissionDenied || loc?.error === "denied") {
+          showToast({
+            message: "Location blocked. Please allow location in your browser site settings.",
+            type: "error",
+          });
+        } else {
+          showToast({
+            message: "Please turn on your phone GPS / Location service and try again.",
+            type: "error",
+          });
+        }
+      }
+    } catch (_) {
+      setLocationStatus({ loading: false, resolved: false, address: "", error: "unavailable" });
+    }
+  };
 
   // Load vehicles list if not preselected
   useEffect(() => {
@@ -363,11 +538,11 @@ export default function MaintenanceFormV2({
       }
     }
   };
-
   // Process files selected from camera or file picker
   const handleFilesSelected = useCallback(
-    async (incomingFileList) => {
+    async (incomingFileList, { isCameraCapture = false } = {}) => {
       if (!incomingFileList || incomingFileList.length === 0) return;
+      if (isProcessingMedia) return;
       setFileError(null);
 
       const incomingArr = Array.from(incomingFileList);
@@ -376,60 +551,106 @@ export default function MaintenanceFormV2({
         setFileError(`You can attach up to ${MAX_ATTACHMENTS} photos/videos.`);
       }
 
-      const validFiles = [];
       const remainingSlots = MAX_ATTACHMENTS - attachedFiles.length;
+      if (remainingSlots <= 0) return;
 
-      for (let i = 0; i < Math.min(incomingArr.length, remainingSlots); i++) {
-        let file = incomingArr[i];
-        const isImage = file.type.startsWith("image/");
-        const isVideo = file.type.startsWith("video/");
+      setIsProcessingMedia(true);
+      setMediaProcessingText(
+        isCameraCapture
+          ? "Stamping date, time and location onto photo..."
+          : "Processing media file..."
+      );
 
-        if (!isImage && !isVideo) {
-          setFileError(`"${file.name}" is not supported. Please select photos or videos.`);
-          continue;
+      try {
+        const validFiles = [];
+
+        for (let i = 0; i < Math.min(incomingArr.length, remainingSlots); i++) {
+          let file = incomingArr[i];
+          const isImage = file.type.startsWith("image/");
+          const isVideo = file.type.startsWith("video/");
+
+          if (!isImage && !isVideo) {
+            setFileError(`"${file.name}" is not supported. Please select photos or videos.`);
+            continue;
+          }
+
+          // Camera Capture: automatically embed date, time & location watermark in bottom-left corner
+          if (isCameraCapture && isImage) {
+            try {
+              setMediaProcessingText("Stamping date, time and location onto photo...");
+              const captureTime =
+                file.lastModified && Math.abs(Date.now() - file.lastModified) < 24 * 60 * 60 * 1000
+                  ? new Date(file.lastModified)
+                  : new Date();
+
+              file = await watermarkCapturedPhoto(file, {
+                captureTime,
+                locDetails: locationStatus.resolved ? locationStatus : null,
+              });
+
+              if (!locationStatus.resolved) {
+                getCurrentLocationDetails().then((loc) => {
+                  if (loc && (loc.latitude || (loc.address && loc.address !== "Location unavailable"))) {
+                    setLocationStatus({
+                      loading: false,
+                      resolved: true,
+                      address: loc.address,
+                      error: null,
+                    });
+                  }
+                });
+              }
+            } catch (watermarkErr) {
+              console.warn("Watermarking failed, using original photo:", watermarkErr);
+            }
+          } else if (isImage) {
+            // Optimize regular uploaded images
+            try {
+              file = await compressImageFile(file);
+            } catch (_) {}
+          }
+
+          if (isImage && file.size > MAX_IMAGE_SIZE_BYTES) {
+            setFileError(`Photo "${file.name}" exceeds 10 MB limit.`);
+            continue;
+          }
+
+          if (isVideo && file.size > MAX_VIDEO_SIZE_BYTES) {
+            setFileError(`Video "${file.name}" exceeds 100 MB limit.`);
+            continue;
+          }
+
+          const isDuplicate = attachedFiles.some(
+            (existing) => existing.file?.name === file.name && existing.file?.size === file.size
+          );
+          if (isDuplicate) continue;
+
+          const previewUrl = URL.createObjectURL(file);
+          validFiles.push({
+            id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            file,
+            fileName: file.name,
+            mimeType: file.type,
+            fileSize: file.size,
+            mediaType: isImage ? "image" : "video",
+            previewUrl,
+          });
         }
 
-        // Optimize mobile camera images automatically on client to prevent 413 limits and speed up upload
-        if (isImage) {
-          try {
-            file = await compressImageFile(file);
-          } catch (_) {}
+        if (validFiles.length > 0) {
+          setAttachedFiles((prev) => [...prev, ...validFiles]);
+          setFileError(null);
+          setFormError(null);
         }
-
-        if (isImage && file.size > MAX_IMAGE_SIZE_BYTES) {
-          setFileError(`Photo "${file.name}" exceeds 10 MB limit.`);
-          continue;
-        }
-
-        if (isVideo && file.size > MAX_VIDEO_SIZE_BYTES) {
-          setFileError(`Video "${file.name}" exceeds 100 MB limit.`);
-          continue;
-        }
-
-        const isDuplicate = attachedFiles.some(
-          (existing) => existing.file?.name === file.name && existing.file?.size === file.size
-        );
-        if (isDuplicate) continue;
-
-        const previewUrl = URL.createObjectURL(file);
-        validFiles.push({
-          id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-          file,
-          fileName: file.name,
-          mimeType: file.type,
-          fileSize: file.size,
-          mediaType: isImage ? "image" : "video",
-          previewUrl,
-        });
-      }
-
-      if (validFiles.length > 0) {
-        setAttachedFiles((prev) => [...prev, ...validFiles]);
-        setFileError(null);
-        setFormError(null);
+      } catch (err) {
+        console.error("Error processing media files:", err);
+        setFileError("An error occurred while processing the photo. Please try again.");
+      } finally {
+        setIsProcessingMedia(false);
+        setMediaProcessingText("");
       }
     },
-    [attachedFiles]
+    [attachedFiles, isProcessingMedia, locationStatus]
   );
 
   // Remove attached file
@@ -881,7 +1102,7 @@ export default function MaintenanceFormV2({
             capture="environment"
             className="hidden"
             onChange={(e) => {
-              handleFilesSelected(e.target.files);
+              handleFilesSelected(e.target.files, { isCameraCapture: true });
               e.target.value = "";
             }}
           />
@@ -892,10 +1113,86 @@ export default function MaintenanceFormV2({
             multiple
             className="hidden"
             onChange={(e) => {
-              handleFilesSelected(e.target.files);
+              handleFilesSelected(e.target.files, { isCameraCapture: false });
               e.target.value = "";
             }}
           />
+
+          {/* Location Status & Enable Bar */}
+          {locationStatus.resolved ? (
+            <div className="flex items-center justify-between px-3.5 py-2.5 bg-emerald-50/95 border border-emerald-200/90 rounded-2xl text-xs text-emerald-900 shadow-2xs">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="relative flex h-2.5 w-2.5 shrink-0">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+                </span>
+                <span className="truncate">
+                  Photo GPS Stamp: <strong className="font-bold text-emerald-950">{locationStatus.address}</strong>
+                </span>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setShowManualModal(true)}
+                  className="text-[11px] font-semibold text-slate-500 hover:text-slate-800 hover:underline cursor-pointer"
+                  title="Edit or adjust coordinates"
+                >
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  onClick={handleRequestLocation}
+                  className="text-[11px] font-bold text-emerald-700 hover:text-emerald-950 hover:underline cursor-pointer"
+                  title="Refresh GPS from device"
+                >
+                  Refresh
+                </button>
+              </div>
+            </div>
+          ) : locationStatus.loading ? (
+            <div className="flex items-center justify-between px-3.5 py-2.5 bg-blue-50/90 border border-blue-200 rounded-2xl text-xs text-blue-900 shadow-2xs">
+              <div className="flex items-center gap-2">
+                <ImSpinner9 className="w-3.5 h-3.5 animate-spin text-blue-600 shrink-0" />
+                <span className="font-medium">Acquiring accurate GPS coordinates for photo stamp...</span>
+              </div>
+              <button
+                type="button"
+                onClick={handleSetChemburLocation}
+                className="text-[11px] font-bold text-blue-700 bg-blue-100 hover:bg-blue-200 px-2.5 py-1 rounded-lg shrink-0 cursor-pointer"
+              >
+                Use Chembur
+              </button>
+            </div>
+          ) : (
+            <div className="p-3.5 bg-amber-50/95 border border-amber-200/90 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-amber-950 shadow-2xs">
+              <div className="flex items-start gap-2.5 min-w-0">
+                <FiAlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <div className="min-w-0">
+                  <span className="font-bold block">GPS Location needed for photo watermark</span>
+                  <span className="text-[11px] text-amber-800 block">
+                    Tap &ldquo;Enable Location&rdquo; to query device GPS, or use Chembur office coordinates.
+                  </span>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                <button
+                  type="button"
+                  onClick={handleSetChemburLocation}
+                  className="px-3 py-1.5 rounded-xl border border-amber-300 hover:bg-amber-100 text-amber-900 text-xs font-semibold transition-all cursor-pointer"
+                  title="Quick-set Chembur office coordinates"
+                >
+                  Use Chembur Office
+                </button>
+                <button
+                  type="button"
+                  onClick={handleRequestLocation}
+                  className="px-3.5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 active:scale-95 text-white text-xs font-bold transition-all cursor-pointer shadow-xs"
+                >
+                  Enable Location
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Side by side 50% buttons */}
           <div
@@ -908,19 +1205,30 @@ export default function MaintenanceFormV2({
             {/* Button A: Take Photo */}
             <button
               type="button"
-              onClick={() => cameraInputRef.current?.click()}
-              disabled={isSubmitting || attachedFiles.length >= MAX_ATTACHMENTS}
+              onClick={() => {
+                if (!locationStatus.resolved) {
+                  handleRequestLocation();
+                } else {
+                  preloadLocation();
+                }
+                cameraInputRef.current?.click();
+              }}
+              disabled={isSubmitting || isProcessingMedia || attachedFiles.length >= MAX_ATTACHMENTS}
               className="group p-4 sm:p-5 rounded-2xl border-2 border-dashed border-blue-300 hover:border-blue-500 bg-blue-50/50 hover:bg-blue-50 text-blue-700 flex flex-col items-center justify-center gap-2 transition-all cursor-pointer shadow-xs active:scale-98 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <div className="w-12 h-12 rounded-xl bg-blue-600 text-white flex items-center justify-center shadow-md group-hover:scale-105 transition-transform">
-                <FiCamera className="w-6 h-6" />
+                {isProcessingMedia ? (
+                  <ImSpinner9 className="w-6 h-6 animate-spin" />
+                ) : (
+                  <FiCamera className="w-6 h-6" />
+                )}
               </div>
               <div className="text-center">
                 <span className="block text-sm sm:text-base font-bold text-slate-900 leading-tight">
-                  Take Photo
+                  {isProcessingMedia ? "Processing..." : "Take Photo"}
                 </span>
                 <span className="text-[11px] font-semibold text-blue-600">
-                  Open Camera *
+                  {isProcessingMedia ? "Stamping photo..." : "Open Camera *"}
                 </span>
               </div>
             </button>
@@ -929,7 +1237,7 @@ export default function MaintenanceFormV2({
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              disabled={isSubmitting || attachedFiles.length >= MAX_ATTACHMENTS}
+              disabled={isSubmitting || isProcessingMedia || attachedFiles.length >= MAX_ATTACHMENTS}
               className="group p-4 sm:p-5 rounded-2xl border-2 border-dashed border-amber-300 hover:border-amber-400 bg-amber-50/100 hover:bg-amber-50/40 text-amber-700 flex flex-col items-center justify-center gap-2 transition-all cursor-pointer shadow-xs active:scale-98 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <div className="w-12 h-12 rounded-xl bg-amber-600 text-white flex items-center justify-center shadow-md group-hover:scale-105 transition-transform">
@@ -945,6 +1253,14 @@ export default function MaintenanceFormV2({
               </div>
             </button>
           </div>
+
+          {/* Media Processing Loading Alert */}
+          {isProcessingMedia && (
+            <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl flex items-center gap-2.5 text-xs font-semibold text-blue-700 animate-fadeIn">
+              <ImSpinner9 className="w-4 h-4 animate-spin text-blue-600 shrink-0" />
+              <span>{mediaProcessingText || "Processing photo with date, time and location..."}</span>
+            </div>
+          )}
 
           {fileError && (
             <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-center gap-2 text-xs font-semibold text-rose-700 animate-fadeIn">
@@ -971,7 +1287,11 @@ export default function MaintenanceFormV2({
                       <img
                         src={item.previewUrl}
                         alt={item.fileName}
-                        className="w-full h-full object-cover"
+                        onClick={() => {
+                          if (item.previewUrl) window.open(item.previewUrl, "_blank");
+                        }}
+                        title="Click to view full photo"
+                        className="w-full h-full object-cover cursor-pointer hover:opacity-95 transition-opacity"
                       />
                     ) : (
                       <div className="flex flex-col items-center justify-center gap-1 text-slate-500">
@@ -981,7 +1301,7 @@ export default function MaintenanceFormV2({
                     )}
 
                     {/* File Size Badge */}
-                    <div className="absolute bottom-1.5 left-1.5 px-1.5 py-0.5 rounded bg-black/65 text-white text-[10px] font-medium backdrop-blur-xs">
+                    <div className="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 rounded bg-black/65 text-white text-[10px] font-medium backdrop-blur-xs">
                       {(item.fileSize / (1024 * 1024)).toFixed(1)} MB
                     </div>
 
@@ -989,7 +1309,7 @@ export default function MaintenanceFormV2({
                     <button
                       type="button"
                       onClick={() => handleRemoveFile(item.id)}
-                      disabled={isSubmitting}
+                      disabled={isSubmitting || isProcessingMedia}
                       className="absolute top-1.5 right-1.5 w-7 h-7 rounded-full bg-rose-600 text-white flex items-center justify-center shadow-md hover:bg-rose-700 active:scale-95 transition-all cursor-pointer"
                       title="Remove file"
                     >
@@ -1135,7 +1455,7 @@ export default function MaintenanceFormV2({
         <div className="pt-2 space-y-2.5">
           <button
             type="submit"
-            disabled={isSubmitting}
+            disabled={isSubmitting || isProcessingMedia}
             className="w-full py-4 px-6 rounded-2xl bg-blue-600 hover:bg-blue-700 active:scale-[0.99] text-white font-bold text-base sm:text-lg shadow-lg shadow-blue-600/25 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
           >
             {isSubmitting ? (
@@ -1163,6 +1483,143 @@ export default function MaintenanceFormV2({
             </button>
           )}
         </div>
+
+        {/* Permission Help Modal */}
+        {showPermissionModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-fadeIn">
+            <div className="bg-white rounded-3xl p-6 max-w-sm w-full shadow-2xl space-y-4">
+              <div className="w-12 h-12 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center mx-auto">
+                <FiAlertCircle className="w-6 h-6" />
+              </div>
+              <div className="text-center">
+                <h3 className="font-bold text-base text-slate-900">
+                  {permissionModalReason === "insecure" ? "HTTPS Required for GPS" : "Location Permission Blocked"}
+                </h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  {permissionModalReason === "insecure"
+                    ? "Browsers only permit hardware GPS over secure HTTPS connections. You can instantly use your Chembur office coordinates below."
+                    : "Your browser is currently blocking location access for this site."}
+                </p>
+              </div>
+
+              {permissionModalReason !== "insecure" && (
+                <div className="bg-slate-50 rounded-2xl p-3.5 space-y-2 text-xs text-slate-700">
+                  <div className="flex items-start gap-2">
+                    <span className="w-5 h-5 rounded-full bg-blue-100 text-blue-700 font-bold flex items-center justify-center shrink-0 text-[11px]">1</span>
+                    <span>Tap the <strong>🔒 Lock</strong> or <strong>⚙️ Settings</strong> icon in your browser address bar.</span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="w-5 h-5 rounded-full bg-blue-100 text-blue-700 font-bold flex items-center justify-center shrink-0 text-[11px]">2</span>
+                    <span>Tap <strong>Site Settings</strong> → <strong>Location</strong> → <strong>Allow</strong>.</span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="w-5 h-5 rounded-full bg-blue-100 text-blue-700 font-bold flex items-center justify-center shrink-0 text-[11px]">3</span>
+                    <span>Return and tap <strong>Try GPS Again</strong>.</span>
+                  </div>
+                </div>
+              )}
+
+              <div className="space-y-2 pt-1">
+                <button
+                  type="button"
+                  onClick={handleSetChemburLocation}
+                  className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs cursor-pointer transition-all"
+                >
+                  Use Chembur Office (19.0596° N, 72.8895° E)
+                </button>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowPermissionModal(false)}
+                    className="flex-1 py-2 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-semibold cursor-pointer"
+                  >
+                    Close
+                  </button>
+                  {permissionModalReason !== "insecure" && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowPermissionModal(false);
+                        handleRequestLocation();
+                      }}
+                      className="flex-1 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold cursor-pointer"
+                    >
+                      Try GPS Again
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Manual Coordinates Modal */}
+        {showManualModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-fadeIn">
+            <div className="bg-white rounded-3xl p-6 max-w-sm w-full shadow-2xl space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="font-bold text-base text-slate-900">Set Photo GPS Stamp</h3>
+                <button
+                  type="button"
+                  onClick={() => setShowManualModal(false)}
+                  className="p-1 rounded-lg text-slate-400 hover:text-slate-600"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="space-y-3 text-xs">
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">Latitude</label>
+                  <input
+                    type="text"
+                    value={manualCoordsInput.lat}
+                    onChange={(e) => setManualCoordsInput({ ...manualCoordsInput, lat: e.target.value })}
+                    className="w-full p-2.5 border border-slate-200 rounded-xl font-mono text-xs outline-none focus:border-blue-500"
+                    placeholder="e.g. 19.0596"
+                  />
+                </div>
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">Longitude</label>
+                  <input
+                    type="text"
+                    value={manualCoordsInput.lng}
+                    onChange={(e) => setManualCoordsInput({ ...manualCoordsInput, lng: e.target.value })}
+                    className="w-full p-2.5 border border-slate-200 rounded-xl font-mono text-xs outline-none focus:border-blue-500"
+                    placeholder="e.g. 72.8895"
+                  />
+                </div>
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">Location Name / Suburb</label>
+                  <input
+                    type="text"
+                    value={manualCoordsInput.area}
+                    onChange={(e) => setManualCoordsInput({ ...manualCoordsInput, area: e.target.value })}
+                    className="w-full p-2.5 border border-slate-200 rounded-xl text-xs outline-none focus:border-blue-500"
+                    placeholder="e.g. Chembur, Mumbai"
+                  />
+                </div>
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={handleSetChemburLocation}
+                  className="flex-1 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold cursor-pointer"
+                >
+                  Reset Chembur
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveManualCoords}
+                  className="flex-1 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold cursor-pointer"
+                >
+                  Save Location
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </form>
     </div>
   );

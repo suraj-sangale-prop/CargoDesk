@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from "react";
 import CommonModal from "../common/commonModal";
-import ResetConfirmation from "../common/items/resetConfirmation";
+import ResetConfirmation from "../common/items/commonConfirmation";
 import UserFormModal, { ROLE_DEFINITIONS } from "./userFormModal";
 import RolesMatrix from "./rolesMatrix";
 import OrganizationModal from "./organizationModal";
@@ -218,11 +218,10 @@ export default function UsersWrapper({ pageData = {} }) {
             return (
               <div className="flex items-center gap-3">
                 <div
-                  className={`w-9 h-9 rounded-full text-white font-bold text-xs flex items-center justify-center shrink-0 shadow-xs ${
-                    isSuper
+                  className={`w-9 h-9 rounded-full text-white font-bold text-xs flex items-center justify-center shrink-0 shadow-xs ${isSuper
                       ? "bg-gradient-to-tr from-purple-600 to-indigo-600 ring-2 ring-purple-400/40"
                       : "bg-gradient-to-tr from-blue-600 to-indigo-600"
-                  }`}
+                    }`}
                 >
                   {initial}
                 </div>
@@ -342,17 +341,15 @@ export default function UsersWrapper({ pageData = {} }) {
                   if (!isSuper) handleToggleStatus(row);
                 }}
                 disabled={isSuper}
-                className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full border transition-all inline-flex items-center gap-1.5 ${
-                  isActive
+                className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full border transition-all inline-flex items-center gap-1.5 ${isActive
                     ? "bg-emerald-50 text-emerald-700 border-emerald-200"
                     : "bg-rose-50 text-rose-700 border-rose-200"
-                } ${isSuper ? "cursor-default" : "cursor-pointer hover:opacity-80"}`}
+                  } ${isSuper ? "cursor-default" : "cursor-pointer hover:opacity-80"}`}
                 title={isSuper ? "Super admin is permanently active" : "Click to toggle status"}
               >
                 <span
-                  className={`w-1.5 h-1.5 rounded-full ${
-                    isActive ? "bg-emerald-500" : "bg-rose-500"
-                  }`}
+                  className={`w-1.5 h-1.5 rounded-full ${isActive ? "bg-emerald-500" : "bg-rose-500"
+                    }`}
                 />
                 {isActive ? "Active" : "Inactive"}
               </button>
@@ -679,11 +676,10 @@ export default function UsersWrapper({ pageData = {} }) {
         <div className="flex border-b border-slate-200/80 px-4 sm:px-6 pt-3 bg-slate-50/50 gap-2 sm:gap-4 overflow-x-auto">
           <button
             onClick={() => setActiveTab("users")}
-            className={`pb-3 px-3 text-xs sm:text-sm font-bold flex items-center gap-2 border-b-2 transition-all whitespace-nowrap cursor-pointer ${
-              activeTab === "users"
+            className={`pb-3 px-3 text-xs sm:text-sm font-bold flex items-center gap-2 border-b-2 transition-all whitespace-nowrap cursor-pointer ${activeTab === "users"
                 ? "border-blue-600 text-blue-600"
                 : "border-transparent text-slate-500 hover:text-slate-800"
-            }`}
+              }`}
           >
             <FiUsers className="w-4 h-4" />
             <span>All Members ({filteredUsers.length})</span>
@@ -691,11 +687,10 @@ export default function UsersWrapper({ pageData = {} }) {
 
           <button
             onClick={() => setActiveTab("organizations")}
-            className={`pb-3 px-3 text-xs sm:text-sm font-bold flex items-center gap-2 border-b-2 transition-all whitespace-nowrap cursor-pointer ${
-              activeTab === "organizations"
+            className={`pb-3 px-3 text-xs sm:text-sm font-bold flex items-center gap-2 border-b-2 transition-all whitespace-nowrap cursor-pointer ${activeTab === "organizations"
                 ? "border-purple-600 text-purple-600"
                 : "border-transparent text-slate-500 hover:text-slate-800"
-            }`}
+              }`}
           >
             <FiBriefcase className="w-4 h-4" />
             <span>Organizations ({organizations.length})</span>
@@ -703,11 +698,10 @@ export default function UsersWrapper({ pageData = {} }) {
 
           <button
             onClick={() => setActiveTab("roles")}
-            className={`pb-3 px-3 text-xs sm:text-sm font-bold flex items-center gap-2 border-b-2 transition-all whitespace-nowrap cursor-pointer ${
-              activeTab === "roles"
+            className={`pb-3 px-3 text-xs sm:text-sm font-bold flex items-center gap-2 border-b-2 transition-all whitespace-nowrap cursor-pointer ${activeTab === "roles"
                 ? "border-blue-600 text-blue-600"
                 : "border-transparent text-slate-500 hover:text-slate-800"
-            }`}
+              }`}
           >
             <FiShield className="w-4 h-4" />
             <span>Role Permissions Matrix</span>
@@ -853,9 +847,8 @@ export default function UsersWrapper({ pageData = {} }) {
                         <div className="flex items-start justify-between gap-3">
                           <div className="flex items-center gap-3">
                             <div
-                              className={`w-10 h-10 rounded-full text-white font-bold text-sm flex items-center justify-center shrink-0 ${
-                                isSuper ? "bg-purple-600" : "bg-blue-600"
-                              }`}
+                              className={`w-10 h-10 rounded-full text-white font-bold text-sm flex items-center justify-center shrink-0 ${isSuper ? "bg-purple-600" : "bg-blue-600"
+                                }`}
                             >
                               {initial}
                             </div>
@@ -873,11 +866,10 @@ export default function UsersWrapper({ pageData = {} }) {
                           </div>
 
                           <span
-                            className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
-                              isActive
+                            className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${isActive
                                 ? "bg-emerald-50 text-emerald-700 border-emerald-200"
                                 : "bg-rose-50 text-rose-700 border-rose-200"
-                            }`}
+                              }`}
                           >
                             {isActive ? "Active" : "Inactive"}
                           </span>
