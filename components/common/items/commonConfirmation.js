@@ -1,6 +1,6 @@
 import React from "react";
 
-const ResetConfirmation = ({
+const CommonConfirmation = ({
   onConfirm,
   onCancel,
   confirmText = "Yes",
@@ -38,4 +38,4 @@ const ResetConfirmation = ({
   );
 };
 
-export default ResetConfirmation;
+export default CommonConfirmation;

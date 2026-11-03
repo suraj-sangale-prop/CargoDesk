@@ -8,7 +8,7 @@ import React, {
 import { postApiData } from "@/utilities/services/apiService";
 import { showToast } from "@/utilities/toastService";
 import CommonModal from "@/components/common/commonModal";
-import ResetConfirmation from "@/components/common/items/resetConfirmation";
+import CommonConfirmation from "@/components/common/items/commonConfirmation";
 
 export const FleetDriverContext = createContext(null);
 
@@ -258,7 +258,7 @@ export function FleetDriverProvider({
         setModalOpen={setLogoutModal}
         backDrop={false}
       >
-        <ResetConfirmation
+        <CommonConfirmation
           title="Are you sure you want to log out?"
           onConfirm={handleLogout}
           onCancel={toggleLogoutModal}
