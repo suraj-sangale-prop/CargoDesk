@@ -185,6 +185,7 @@ export default function MaintenanceFormV2({
         coordStr: loc.coordStr || "19.0596° N, 72.8895° E",
         latitude: loc.latitude,
         longitude: loc.longitude,
+        source: "manual",
         error: null,
       });
       showToast({ message: `Location set: ${loc.address}`, type: "success" });
@@ -215,6 +216,7 @@ export default function MaintenanceFormV2({
         coordStr: loc.coordStr,
         latitude: loc.latitude,
         longitude: loc.longitude,
+        source: "manual",
         error: null,
       });
       showToast({ message: `Coordinates updated: ${loc.address}`, type: "success" });
@@ -583,23 +585,31 @@ export default function MaintenanceFormV2({
                   ? new Date(file.lastModified)
                   : new Date();
 
-              file = await watermarkCapturedPhoto(file, {
-                captureTime,
-                locDetails: locationStatus.resolved ? locationStatus : null,
-              });
+              // Use a manually chosen location if the user set one; otherwise get the
+              // CURRENT device location (cached max 60s) instead of the one from page load.
+              const isManual = locationStatus.resolved && locationStatus.source === "manual";
+              let locDetails = isManual ? locationStatus : await getCurrentLocationDetails();
 
-              if (!locationStatus.resolved) {
-                getCurrentLocationDetails().then((loc) => {
-                  if (loc && (loc.latitude || (loc.address && loc.address !== "Location unavailable"))) {
-                    setLocationStatus({
-                      loading: false,
-                      resolved: true,
-                      address: loc.address,
-                      error: null,
-                    });
-                  }
-                });
+              if (locDetails && locDetails.latitude && locDetails.longitude) {
+                if (!isManual) {
+                  setLocationStatus({
+                    loading: false,
+                    resolved: true,
+                    address: locDetails.address,
+                    placeName: locDetails.placeName || "",
+                    coordStr: locDetails.coordStr || "",
+                    latitude: locDetails.latitude,
+                    longitude: locDetails.longitude,
+                    source: locDetails.source || "gps",
+                    error: null,
+                  });
+                }
+              } else if (locationStatus.resolved && locationStatus.latitude) {
+                // Fresh lookup failed – fall back to the last known good location
+                locDetails = locationStatus;
               }
+
+              file = await watermarkCapturedPhoto(file, { captureTime, locDetails });
             } catch (watermarkErr) {
               console.warn("Watermarking failed, using original photo:", watermarkErr);
             }

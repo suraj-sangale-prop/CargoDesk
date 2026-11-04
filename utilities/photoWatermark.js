@@ -60,36 +60,50 @@ export async function checkLocationPermissionState() {
 /**
  * Extract human-readable locality and city from geocoding response
  */
-function extractPlaceName(data) {
-  if (!data) return "";
-  const addr = data.address || data;
-  const parts = [];
+// OpenStreetMap Nominatim response -> "Road, Suburb, City"
+function extractNominatimPlace(data) {
+  const addr = data?.address;
+  if (!addr) return "";
 
-  // Locality / Suburb (e.g. "Chembur", "Kharghar", "Andheri East")
+  const road = addr.road || addr.pedestrian || addr.footway || addr.street;
   const locality =
     addr.suburb ||
-    data.locality ||
     addr.neighbourhood ||
-    addr.subLocality ||
-    data.neighbourhood ||
-    data.subLocality ||
+    addr.quarter ||
     addr.residential ||
+    addr.hamlet ||
     addr.village ||
     addr.town;
-
-  // City / Municipal District (e.g. "Mumbai", "Navi Mumbai", "Thane")
   const city =
-    data.city ||
-    addr.city ||
-    addr.city_district ||
-    addr.state_district ||
-    data.principalSubdivision ||
-    addr.state;
+    addr.city || addr.town || addr.municipality || addr.city_district || addr.county || addr.state_district || addr.state;
 
-  if (locality) parts.push(locality);
-  if (city && city !== locality) parts.push(city);
+  return uniqueJoin([road, locality, city]);
+}
 
-  return parts.join(", ");
+// BigDataCloud response -> "Locality, City"
+function extractBigDataCloudPlace(data) {
+  if (!data) return "";
+
+  // Most specific administrative / informative entry (highest "order") below city level
+  const infoEntries = [
+    ...(data.localityInfo?.administrative || []),
+    ...(data.localityInfo?.informative || []),
+  ].filter((e) => e && e.name && typeof e.order === "number" && e.order >= 7 && !/time zone|plate/i.test(e.description || ""));
+  infoEntries.sort((a, b) => b.order - a.order);
+
+  const locality = data.locality || infoEntries[0]?.name;
+  const city = data.city || data.principalSubdivision;
+
+  return uniqueJoin([locality, city]);
+}
+
+function uniqueJoin(parts) {
+  const out = [];
+  parts.forEach((p) => {
+    const v = typeof p === "string" ? p.trim() : "";
+    if (v && !out.some((o) => o.toLowerCase() === v.toLowerCase())) out.push(v);
+  });
+  return out.join(", ");
 }
 
 /**
@@ -99,10 +113,26 @@ function extractPlaceName(data) {
  * NOTE: Only called with real coordinates; never uses inaccurate ISP IP guessing.
  */
 export async function reverseGeocode(latitude, longitude) {
-  // Strategy 1: BigDataCloud free client-side API with coordinates
+  // Strategy 1: OpenStreetMap Nominatim (street / suburb level detail)
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 4000);
+
+    const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${latitude}&lon=${longitude}&zoom=18&addressdetails=1&accept-language=en`;
+    const res = await fetch(url, { signal: controller.signal });
+    clearTimeout(timer);
+
+    if (res.ok) {
+      const data = await res.json();
+      const place = extractNominatimPlace(data);
+      if (place) return place;
+    }
+  } catch (_) {}
+
+  // Strategy 2: BigDataCloud free client-side API fallback
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3500);
 
     const url = `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${latitude}&longitude=${longitude}&localityLanguage=en`;
     const res = await fetch(url, { signal: controller.signal });
@@ -110,23 +140,7 @@ export async function reverseGeocode(latitude, longitude) {
 
     if (res.ok) {
       const data = await res.json();
-      const place = extractPlaceName(data);
-      if (place) return place;
-    }
-  } catch (_) {}
-
-  // Strategy 2: OpenStreetMap Nominatim fallback
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 3500);
-
-    const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=16`;
-    const res = await fetch(url, { signal: controller.signal });
-    clearTimeout(timer);
-
-    if (res.ok) {
-      const data = await res.json();
-      const place = extractPlaceName(data);
+      const place = extractBigDataCloudPlace(data);
       if (place) return place;
     }
   } catch (_) {}
@@ -142,8 +156,8 @@ export async function setManualLocation(latitude, longitude, customPlaceName = "
   const lngNum = parseFloat(longitude);
   if (isNaN(latNum) || isNaN(lngNum)) return null;
 
-  const latStr = `${Math.abs(latNum).toFixed(4)}° ${latNum >= 0 ? "N" : "S"}`;
-  const lngStr = `${Math.abs(lngNum).toFixed(4)}° ${lngNum >= 0 ? "E" : "W"}`;
+  const latStr = `${Math.abs(latNum).toFixed(5)}° ${latNum >= 0 ? "N" : "S"}`;
+  const lngStr = `${Math.abs(lngNum).toFixed(5)}° ${lngNum >= 0 ? "E" : "W"}`;
   const coordStr = `${latStr}, ${lngStr}`;
 
   let placeName = customPlaceName;
@@ -222,97 +236,101 @@ export async function queryDeviceLocation({ forceRefresh = false } = {}) {
     };
   }
 
-  return new Promise((resolve) => {
-    let resolved = false;
+  // Collect position fixes for a short window and keep the MOST ACCURATE one.
+  // (Previously the first fix to arrive was used, so a coarse Wi-Fi/cell/IP fix
+  //  that could be kilometres off often beat the real GPS fix.)
+  const GOOD_ACCURACY_M = 30; // stop early once a fix is this precise
+  const MAX_WAIT_MS = 10000; // hard upper bound for collecting fixes
+
+  const bestPosition = await new Promise((resolve) => {
+    let best = null;
+    let finished = false;
     let permDenied = false;
+    let watchId = null;
+    let maxTimer = null;
+    let softTimer = null;
+    const startedAt = Date.now();
 
-    // Fast-resolve handler
-    const handleSuccess = async (position) => {
-      if (resolved) return;
-      resolved = true;
-
-      const { latitude, longitude, accuracy } = position.coords;
-      const latStr = `${Math.abs(latitude).toFixed(4)}° ${latitude >= 0 ? "N" : "S"}`;
-      const lngStr = `${Math.abs(longitude).toFixed(4)}° ${longitude >= 0 ? "E" : "W"}`;
-      const coordStr = `${latStr}, ${lngStr}`;
-
-      let placeName = "";
-      try {
-        placeName = await reverseGeocode(latitude, longitude);
-      } catch (_) {}
-
-      const fullAddress = placeName ? `${coordStr} • ${placeName}` : coordStr;
-      const locData = {
-        address: fullAddress,
-        placeName: placeName || "",
-        coordStr,
-        latitude,
-        longitude,
-        accuracy: accuracy || null,
-        source: "gps",
-      };
-
-      cachedLocation = locData;
-      cachedLocationTimestamp = Date.now();
-      resolve(locData);
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+      clearTimeout(maxTimer);
+      clearInterval(softTimer);
+      resolve({ position: best, permDenied });
     };
 
-    // Staggered dual query:
-    // 1. High accuracy GPS (timeout 4500ms)
-    navigator.geolocation.getCurrentPosition(
-      handleSuccess,
-      (err) => {
-        if (err?.code === 1) permDenied = true;
-        // If high accuracy failed, try low accuracy network immediately
-        if (!resolved && !permDenied) {
-          navigator.geolocation.getCurrentPosition(handleSuccess, (e2) => {
-            if (e2?.code === 1) permDenied = true;
-          }, {
-            enableHighAccuracy: false,
-            timeout: 4000,
-            maximumAge: 60000,
-          });
-        }
-      },
-      {
-        enableHighAccuracy: true,
-        timeout: 4500,
-        maximumAge: 15000,
-      }
-    );
+    const consider = (position) => {
+      if (finished || !position?.coords) return;
+      const acc = position.coords.accuracy ?? Infinity;
+      if (!best || acc < (best.coords.accuracy ?? Infinity)) best = position;
+      if (acc <= GOOD_ACCURACY_M) finish();
+    };
 
-    // 2. Also start Low Accuracy after 2000ms if High Accuracy is still negotiating satellites
-    // (This guarantees that indoors in an office, Wi-Fi location resolves in ~2.5s instead of hanging!)
-    setTimeout(() => {
-      if (!resolved && !permDenied) {
-        navigator.geolocation.getCurrentPosition(handleSuccess, (err) => {
-          if (err?.code === 1) permDenied = true;
-        }, {
-          enableHighAccuracy: false,
-          timeout: 4000,
-          maximumAge: 60000,
-        });
+    const onError = (err) => {
+      if (err?.code === 1) {
+        permDenied = true;
+        finish();
       }
-    }, 2000);
+    };
 
-    // 3. Final safety timeout (6500ms total)
-    setTimeout(() => {
-      if (!resolved) {
-        resolved = true;
-        resolve({
-          address: permDenied
-            ? "Location permission denied"
-            : "Location unavailable (Turn on GPS)",
-          placeName: "",
-          coordStr: "",
-          latitude: null,
-          longitude: null,
-          error: permDenied ? "denied" : "timeout",
-          permissionDenied: permDenied,
-        });
-      }
-    }, 6500);
+    // Continuous high-accuracy GPS updates (fresh fixes only)
+    watchId = navigator.geolocation.watchPosition(consider, onError, {
+      enableHighAccuracy: true,
+      timeout: MAX_WAIT_MS,
+      maximumAge: 0,
+    });
+
+    // Network-based fallback so indoor capture still gets *something*
+    navigator.geolocation.getCurrentPosition(consider, onError, {
+      enableHighAccuracy: false,
+      timeout: MAX_WAIT_MS,
+      maximumAge: 30000,
+    });
+
+    // Once we have any fix, don't keep the user waiting too long for a better one
+    softTimer = setInterval(() => {
+      if (best && Date.now() - startedAt >= 5000) finish();
+    }, 500);
+    maxTimer = setTimeout(finish, MAX_WAIT_MS);
   });
+
+  if (!bestPosition.position) {
+    const permDenied = bestPosition.permDenied;
+    return {
+      address: permDenied ? "Location permission denied" : "Location unavailable (Turn on GPS)",
+      placeName: "",
+      coordStr: "",
+      latitude: null,
+      longitude: null,
+      error: permDenied ? "denied" : "timeout",
+      permissionDenied: permDenied,
+    };
+  }
+
+  const { latitude, longitude, accuracy } = bestPosition.position.coords;
+  const latStr = `${Math.abs(latitude).toFixed(5)}° ${latitude >= 0 ? "N" : "S"}`;
+  const lngStr = `${Math.abs(longitude).toFixed(5)}° ${longitude >= 0 ? "E" : "W"}`;
+  const coordStr = `${latStr}, ${lngStr}`;
+
+  let placeName = "";
+  try {
+    placeName = await reverseGeocode(latitude, longitude);
+  } catch (_) {}
+
+  const locData = {
+    address: placeName ? `${coordStr} • ${placeName}` : coordStr,
+    placeName: placeName || "",
+    coordStr,
+    latitude,
+    longitude,
+    accuracy: accuracy || null,
+    source: "gps",
+  };
+
+  cachedLocation = locData;
+  cachedLocationTimestamp = Date.now();
+  return locData;
 }
 
 /**
