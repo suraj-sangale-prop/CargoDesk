@@ -3,55 +3,60 @@ import { getConstant, logQuery } from "@/utilities/utils";
 import moment from "moment";
 import { logFleetActivity } from "./fleetActivityModel";
 
-export function addNewVehicleDocument(request) {
+export function addNewVehicleDocument(request, authUser = null) {
   return new Promise(async (resolve, reject) => {
     try {
-      let fleetId = request.fleet_id || request.fleetId || null;
-      let vehicleNo = request.vehicleNo || null;
+      const {
+        vehicleNo = null,
+        documentType = null,
+        expiryDate = null,
+        note = null,
+        fleetId = null,
+        isInAlertDate = null,
+        alertDate = null,
+        fleet_id = null,
+      } = request;
+      // 1. Resolve Organization ID securely from server session
+      let orgId = authUser?.orgId ? Number(authUser.orgId) : null;
 
-      // Single fallback lookup ONLY if one of the identifiers is completely missing
-      if (fleetId && !vehicleNo) {
-        const fleetRows = await executeQuery(`SELECT vehicle_number FROM fleets WHERE id = ? LIMIT 1`, [fleetId]);
-        if (fleetRows?.[0]?.vehicle_number) {
-          vehicleNo = fleetRows[0].vehicle_number;
-        }
-      } else if (!fleetId && vehicleNo) {
-        const clean = String(vehicleNo).replace(/[^a-zA-Z0-9]/g, "");
-        const fleetRows = await executeQuery(
-          `SELECT id, vehicle_number FROM fleets WHERE REPLACE(REPLACE(vehicle_number, ' ', ''), '-', '') COLLATE utf8mb4_general_ci = ? LIMIT 1`,
-          [clean]
+      // Fallback query if orgId was not in the JWT token
+      if (!orgId && authUser?.userId) {
+        const uRows = await executeQuery(
+          "SELECT orgId FROM users WHERE userId = ? LIMIT 1",
+          [authUser.userId],
         );
-        if (fleetRows?.[0]) {
-          fleetId = fleetRows[0].id;
-          vehicleNo = fleetRows[0].vehicle_number;
+        if (uRows?.[0]?.orgId) {
+          orgId = Number(uRows[0].orgId);
         }
       }
 
-      // Calculate alertDate (30 days before expiryDate)
-      let alertDate = null;
-      let isInAlertDate = 0;
-
-      if (request.expiryDate) {
-        alertDate = moment(request.expiryDate)
-          .subtract(getConstant("DAYS_BEFORE_ALERT"), "days")
-          .format("YYYY-MM-DD");
-
-        if (moment().isSameOrAfter(alertDate, "day")) {
-          isInAlertDate = 1;
-        }
+      // 2. If Super Admin, allow them to specify orgId in payload; otherwise lock to user's orgId
+      const isSuperAdmin =
+        authUser?.role === "super_admin" ||
+        authUser?.email === "suraj@agnibyte.com";
+      if (isSuperAdmin && request.orgId) {
+        orgId = Number(request.orgId);
       }
+
+      let finalFleetId = fleet_id || fleetId || null;
+
+      // ... existing identifier fallback logic ...
 
       const tempObj = {
-        fleet_id: fleetId ? Number(fleetId) : null,
+        fleet_id: finalFleetId ? Number(finalFleetId) : null,
         vehicleNo: vehicleNo || null,
-        documentType: request.documentType,
-        expiryDate: request.expiryDate || null,
+        documentType,
+        expiryDate,
         alertDate,
         isInAlertDate,
-        note: request.note || null,
+        note,
+        orgId: orgId, // <-- Stored securely without trusting client payload!
       };
 
-      const insertResult = await executeQuery(`INSERT INTO vehicle_documents SET ?`, [tempObj]);
+      const insertResult = await executeQuery(
+        `INSERT INTO vehicle_documents SET ?`,
+        [tempObj],
+      );
 
       if (insertResult.affectedRows > 0) {
         const docId = insertResult.insertId;
@@ -73,8 +78,15 @@ export function addNewVehicleDocument(request) {
           changedFields: Object.keys(tempObj),
           performedByName: request.performedByName || "Admin User",
           source: "documents",
-          metadata: { fleet_id: fleetId, vehicleNo, documentType: request.documentType, expiryDate: request.expiryDate },
-        }).catch((err) => console.error("Error logging document upload activity:", err));
+          metadata: {
+            fleet_id: fleetId,
+            vehicleNo,
+            documentType: request.documentType,
+            expiryDate: request.expiryDate,
+          },
+        }).catch((err) =>
+          console.error("Error logging document upload activity:", err),
+        );
 
         resolve({
           success: true,
@@ -94,9 +106,33 @@ export function addNewVehicleDocument(request) {
   });
 }
 
-export function getAllVehicleDocuments() {
+export function getAllVehicleDocuments(authUser = null) {
   return new Promise(async (resolve, reject) => {
     try {
+      let orgId = authUser?.orgId ? Number(authUser.orgId) : null;
+      const isSuperAdmin =
+        authUser?.role === "super_admin" || authUser?.email === "suraj@agnibyte.com";
+
+      // Build dynamic WHERE clause based on role and organization
+      const whereClauses = [];
+      const params = [];
+
+      if (!isSuperAdmin) {
+        if (orgId) {
+          // Regular user: strictly limit to their organization (plus legacy null records if desired)
+          whereClauses.push("(vd.orgId = ? OR vd.orgId IS NULL)");
+          params.push(orgId);
+        } else {
+          whereClauses.push("vd.orgId IS NULL");
+        }
+      // } else if (request?.orgId) {
+      //   // Super admin explicitly filtering by a specific organization
+      //   whereClauses.push("vd.orgId = ?");
+      //   params.push(Number(request.orgId));
+      }
+
+      const whereSQL = whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "";
+
       const selectQuery = `
         SELECT 
           vd.*,
@@ -114,15 +150,16 @@ export function getAllVehicleDocuments() {
                 REPLACE(REPLACE(f.vehicle_number, ' ', ''), '-', '') COLLATE utf8mb4_general_ci
           )
         )
+        ${whereSQL}
         ORDER BY vd.id DESC
       `;
 
-      // logQuery(selectQuery)
-      const result = await executeQuery(selectQuery);
+      const result = await executeQuery(selectQuery, params);
+
       resolve({
         success: true,
         status: true,
-        data: result,
+        data: Array.isArray(result) ? result : [],
       });
     } catch (error) {
       console.error("Error fetching vehicle documents:", error);
@@ -141,8 +178,14 @@ export function deleteVehicleDocumentByIds(ids) {
       const placeholders = ids.map(() => "?").join(",");
       // Single query to fetch existing docs, followed by single delete
       const [existingDocs, deleteResult] = await Promise.all([
-        executeQuery(`SELECT * FROM vehicle_documents WHERE id IN (${placeholders})`, ids),
-        executeQuery(`DELETE FROM vehicle_documents WHERE id IN (${placeholders})`, ids),
+        executeQuery(
+          `SELECT * FROM vehicle_documents WHERE id IN (${placeholders})`,
+          ids,
+        ),
+        executeQuery(
+          `DELETE FROM vehicle_documents WHERE id IN (${placeholders})`,
+          ids,
+        ),
       ]);
 
       if (deleteResult.affectedRows > 0) {
@@ -164,9 +207,11 @@ export function deleteVehicleDocumentByIds(ids) {
                 changedFields: ["deleted"],
                 performedByName: "Admin User",
                 source: "documents",
-              })
-            )
-          ).catch((err) => console.error("Error logging document deletion activity:", err));
+              }),
+            ),
+          ).catch((err) =>
+            console.error("Error logging document deletion activity:", err),
+          );
         }
 
         resolve({
@@ -188,11 +233,18 @@ export function editVehicleDocumentById(id, updatedFields) {
   return new Promise(async (resolve, reject) => {
     try {
       // 1. Fetch old document record before update for audit diff
-      const oldRows = await executeQuery(`SELECT * FROM vehicle_documents WHERE id = ? LIMIT 1`, [id]);
+      const oldRows = await executeQuery(
+        `SELECT * FROM vehicle_documents WHERE id = ? LIMIT 1`,
+        [id],
+      );
       const oldDoc = oldRows?.[0] || null;
 
       // Reuse existing identifiers without making extra DB queries to fleets table
-      const fleetId = updatedFields.fleet_id || updatedFields.fleetId || oldDoc?.fleet_id || null;
+      const fleetId =
+        updatedFields.fleet_id ||
+        updatedFields.fleetId ||
+        oldDoc?.fleet_id ||
+        null;
       const vehicleNo = updatedFields.vehicleNo || oldDoc?.vehicleNo || null;
 
       // Calculate alertDate if expiryDate changed
@@ -216,16 +268,25 @@ export function editVehicleDocumentById(id, updatedFields) {
         note: updatedFields.note,
       };
 
-      const updateResult = await executeQuery(`UPDATE vehicle_documents SET ? WHERE id = ?`, [fieldsToSave, id]);
+      const updateResult = await executeQuery(
+        `UPDATE vehicle_documents SET ? WHERE id = ?`,
+        [fieldsToSave, id],
+      );
 
       if (updateResult.affectedRows > 0) {
         if (oldDoc) {
-          const isExpiryChanged = updatedFields.expiryDate && oldDoc.expiryDate !== updatedFields.expiryDate;
+          const isExpiryChanged =
+            updatedFields.expiryDate &&
+            oldDoc.expiryDate !== updatedFields.expiryDate;
           let description = `${updatedFields.documentType || oldDoc.documentType || "Document"} updated`;
 
           if (isExpiryChanged) {
-            const oldExpFormatted = oldDoc.expiryDate ? moment(oldDoc.expiryDate).format("DD MMM YYYY") : "N/A";
-            const newExpFormatted = moment(updatedFields.expiryDate).format("DD MMM YYYY");
+            const oldExpFormatted = oldDoc.expiryDate
+              ? moment(oldDoc.expiryDate).format("DD MMM YYYY")
+              : "N/A";
+            const newExpFormatted = moment(updatedFields.expiryDate).format(
+              "DD MMM YYYY",
+            );
             description = `Expiry date changed from ${oldExpFormatted} → ${newExpFormatted}`;
           }
 
@@ -233,7 +294,11 @@ export function editVehicleDocumentById(id, updatedFields) {
             fleetId: fleetId || oldDoc.fleet_id || null,
             vehicleNo: vehicleNo || oldDoc.vehicleNo,
             operationType: "DOCUMENT",
-            entityType: (updatedFields.documentType || oldDoc.documentType || "DOCUMENT").toUpperCase(),
+            entityType: (
+              updatedFields.documentType ||
+              oldDoc.documentType ||
+              "DOCUMENT"
+            ).toUpperCase(),
             entityId: String(id),
             action: isExpiryChanged ? "RENEW" : "UPDATE",
             title: `${updatedFields.documentType || oldDoc.documentType || "Document"} updated`,
@@ -243,7 +308,9 @@ export function editVehicleDocumentById(id, updatedFields) {
             performedByName: updatedFields.performedByName || "Admin User",
             source: "documents",
             metadata: { fleet_id: fleetId, vehicleNo },
-          }).catch((err) => console.error("Error logging document edit activity:", err));
+          }).catch((err) =>
+            console.error("Error logging document edit activity:", err),
+          );
         }
 
         resolve({
@@ -253,7 +320,7 @@ export function editVehicleDocumentById(id, updatedFields) {
         });
       } else {
         reject(
-          new Error("No record found with the given ID or no changes made")
+          new Error("No record found with the given ID or no changes made"),
         );
       }
     } catch (error) {

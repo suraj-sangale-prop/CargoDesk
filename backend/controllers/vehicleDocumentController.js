@@ -5,16 +5,17 @@ import {
   getAllVehicleDocuments,
 } from "../models/vehicleDocumentModel";
 
-export function addNewVehicleDocumentController(request) {
+// export function addNewVehicleDocumentController(request) {
+export function addNewVehicleDocumentController(request, authUser = null) {
   return new Promise((resolve, reject) => {
     const response = {
       status: false,
     };
 
-    addNewVehicleDocument(request)
+    addNewVehicleDocument(request, authUser)
       .then((result) => {
         if (result) {
-          response.status = true;// test
+          response.status = true; // test
           response.id = result.id;
           response.message = "Vehicle document added successfully";
           resolve(response);
@@ -29,13 +30,13 @@ export function addNewVehicleDocumentController(request) {
   });
 }
 
-export function getAllVehicleDocumentsController() {
+export function getAllVehicleDocumentsController(authUser) {
   return new Promise((resolve, reject) => {
     const response = {
       status: false,
     };
 
-    getAllVehicleDocuments()
+    getAllVehicleDocuments(authUser)
       .then((result) => {
         response.status = true;
         response.data = result.data;

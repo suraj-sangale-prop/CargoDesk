@@ -1,4 +1,5 @@
 import { getAllVehicleDocumentsController } from "@/backend/controllers/vehicleDocumentController";
+import { getAuthUserFromReq } from "@/utilities/authServer";
 
 export default function handler(req, res) {
   return new Promise((resolve, reject) => {
@@ -6,8 +7,10 @@ export default function handler(req, res) {
     const response = {
       status: false,
     };
+     const authUser = getAuthUserFromReq(req);
+    
 
-    getAllVehicleDocumentsController(request)
+    getAllVehicleDocumentsController(request, authUser)
       .then((result) => {
         res.status(200).json(result);
         resolve(result);

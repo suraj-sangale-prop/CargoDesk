@@ -31,6 +31,9 @@ async function main() {
   const userCols = await db.query('DESCRIBE users');
   console.log('USERS COLS:', userCols.map(c => `${c.Field} (${c.Type})`));
 
+  const docCols = await db.query('DESCRIBE vehicle_documents');
+  console.log('VEHICLE_DOCUMENTS COLS:', docCols.map(c => `${c.Field} (${c.Type})`));
+
   try {
     const maintCols = await db.query('DESCRIBE fleet_maintenance');
     console.log('FLEET_MAINTENANCE COLS:', maintCols);

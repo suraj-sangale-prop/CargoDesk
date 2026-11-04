@@ -30,7 +30,7 @@ const Dashboard = ({ pageData }) => {
     setAddLoading(true);
     try {
       const response = await postApiData("ADD_NEW_VEHICALE_DOCUMENTS", payload);
-      if (response.status || response.success) {
+      if (response.status) {
         const docId = response.id || response.data?.id;
         const LatestData = [
           ...documentTableData,
@@ -46,8 +46,8 @@ const Dashboard = ({ pageData }) => {
       }
     } catch (error) {
       console.error("Error occurred during form submission:", error);
+      setAddLoading(false);
     }
-    setAddLoading(false);
   };
 
   const updateReminderData = async (updatedData) => {

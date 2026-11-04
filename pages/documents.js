@@ -13,7 +13,7 @@ export const getServerSideProps = withUserSsr(async (context, { user }) => {
 
   try {
     const [documents, fleetsRes] = await Promise.all([
-      getAllVehicleDocumentsController(),
+      getAllVehicleDocumentsController(user),
       getAllFleetsController(),
     ]);
 
